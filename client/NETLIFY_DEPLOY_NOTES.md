@@ -1,0 +1,6 @@
+```toml
+[build]
+  base = "client"
+  command = "npm install && npm run build"
+  publish = "dist"
+```

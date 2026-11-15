@@ -12,46 +12,30 @@ export function useGameSocket({ gameCode, role, hostSecret, sessionToken }) {
   const wsRef = useRef(null);
 
   useEffect(() => {
-    if (!gameCode) return;
+    if (!gameCode) return undefined;
     let closedByUser = false;
     let retryTimer;
-
     function connect() {
       const ws = new WebSocket(WS_BASE_URL);
       wsRef.current = ws;
-
       ws.onopen = () => {
         setConnected(true);
         setAuthError(null);
-        ws.send(
-          JSON.stringify({
-            type: 'SUBSCRIBE',
-            gameCode,
-            role,
-            hostSecret,
-            sessionToken,
-          })
-        );
+        ws.send(JSON.stringify({ type: 'SUBSCRIBE', gameCode, role, hostSecret, sessionToken }));
       };
-
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'STATE_UPDATE') {
           setClockOffsetMs(msg.payload.game.serverNow - Date.now());
           setState(msg.payload);
-        } else if (msg.type === 'AUTH_ERROR') {
-          setAuthError(msg.error);
-        }
+        } else if (msg.type === 'AUTH_ERROR') setAuthError(msg.error);
       };
-
       ws.onclose = () => {
         setConnected(false);
-        if (!closedByUser) {
-          retryTimer = setTimeout(connect, 1500);
-        }
+        if (!closedByUser) retryTimer = setTimeout(connect, 1500);
       };
+      ws.onerror = () => ws.close();
     }
-
     connect();
     return () => {
       closedByUser = true;
@@ -65,13 +49,12 @@ export function useGameSocket({ gameCode, role, hostSecret, sessionToken }) {
       wsRef.current.send(JSON.stringify({ ...payload, gameCode }));
     }
   };
-
   return { state, connected, authError, clockOffsetMs, send };
 }
 
 export default function App() {
   const path = window.location.pathname.replace(/\/+$/, '') || '/join';
   if (path === '/host') return <HostView />;
-  if (path === '/display') return <DisplayView />;
-  return <JoinView />;
+  if (path === '/display') return <DisplayView useGameSocket={useGameSocket} />;
+  return <JoinView useGameSocket={useGameSocket} />;
 }
