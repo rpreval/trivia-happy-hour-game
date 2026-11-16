@@ -1,42 +1,32 @@
-# Trivia Happy Hour
+# Trivia Happy Hour — Split-Origin Production Deployment
 
-A real-time multiplayer trivia game with a React client, Express/WebSocket server, PostgreSQL persistence, and Gemini-generated question sets.
+Trivia Happy Hour uses a split architecture:
+- **Frontend (`client/`):** React + Vite SPA hosted on Netlify (`/host`, `/display`, `/join`).
+- **Backend (`server/`):** Express + WebSocket (`ws`) + PostgreSQL hosted on Render, Railway, Fly.io, or Google Cloud Run.
 
-## Configuration
+## Backend deployment
 
-Copy `.env.example` to `.env` and set `DATABASE_URL` and `GEMINI_API_KEY`. The database schema is applied automatically at server startup. For local development, start the API with `npm start` and build the client with `npm run build`.
+1. Provision PostgreSQL and set `DATABASE_URL`.
+2. Deploy the repository's Node service with build command `npm install`, start command `node server/index.js`, and health check `/healthz`.
+3. Run a single backend instance so in-memory round timers and WebSocket rooms stay synchronized.
+4. Configure `NODE_ENV=production`, `DATABASE_URL`, `DATABASE_SSL=true`, `GEMINI_API_KEY`, and `ALLOWED_ORIGINS=https://<your-site>.netlify.app` on the backend host. Keep secrets in the host's environment settings, not in frontend variables.
 
-## Docker
+## Netlify frontend deployment
 
-Build and run the container with your environment variables configured:
+1. Connect the GitHub repository. `client/netlify.toml` sets the client base and `dist` publish directory.
+2. Set these Netlify environment variables before building:
+   - `VITE_API_URL=https://<your-backend-domain>`
+   - `VITE_WS_URL=wss://<your-backend-domain>/ws`
+   - `VITE_PUBLIC_APP_URL=https://<your-site>.netlify.app`
+3. Deploy. The production client requires HTTPS and WSS backend URLs.
 
-```sh
-docker build -t trivia-happy-hour-game .
-docker run --rm -p 8080:8080 -e DATABASE_URL="$DATABASE_URL" -e GEMINI_API_KEY="$GEMINI_API_KEY" trivia-happy-hour-game
-```
+## Multiplayer smoke test
 
-## Deploy to Google Cloud Run
+1. Open `/host`, create a room, and generate questions.
+2. Open `/display?code=<ROOMCODE>` on a separate screen.
+3. Join from a phone using the QR/invite link; confirm the team appears in the host and display views.
+4. Submit answers and verify reveal, scoring, reconnect behavior, and final winner celebration.
 
-Enable the Cloud Run, Cloud Build, and Artifact Registry APIs; configure the Google Cloud project and create Secret Manager secrets named `TRIVIA_DB_URL` and `GEMINI_API_KEY`. Then deploy from the repository root:
+## Local development
 
-```sh
-gcloud run deploy trivia-happy-hour-game \
-  --source . \
-  --region us-east1 \
-  --allow-unauthenticated \
-  --port 8080 \
-  --timeout 3600 \
-  --session-affinity \
-  --min-instances 1 \
-  --concurrency 250 \
-  --set-env-vars "NODE_ENV=production" \
-  --set-secrets "DATABASE_URL=TRIVIA_DB_URL:latest,GEMINI_API_KEY=GEMINI_API_KEY:latest"
-```
-
-The runtime service account must have permission to access both secrets. Cloud Run's session affinity is best-effort; use a shared coordination mechanism if deploying multiple instances that need globally coordinated game timers.
-
-## Routes
-
-- `/host` — create and manage a room
-- `/display?code=ROOMCODE` — public game display
-- `/join?code=ROOMCODE` — team entry and answering
+Install root/server and client dependencies, set backend credentials in a local environment file, and run the Vite client with `npm --prefix client run dev`. Configure `VITE_API_URL` and `VITE_WS_URL` to point to the local backend. Do not commit `.env` files containing secrets.

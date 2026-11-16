@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { WS_BASE_URL } from './config';
 import HostView from './HostView';
 import DisplayView from './DisplayView';
 import JoinView from './JoinView';
 
-export function useGameSocket({ gameCode, role, hostSecret, teamId }) {
+export function useGameSocket({ gameCode, role, hostSecret, sessionToken }) {
   const [state, setState] = useState(null);
   const [connected, setConnected] = useState(false);
+  const [authError, setAuthError] = useState(null);
   const [clockOffsetMs, setClockOffsetMs] = useState(0);
   const wsRef = useRef(null);
 
@@ -14,19 +16,19 @@ export function useGameSocket({ gameCode, role, hostSecret, teamId }) {
     let closedByUser = false;
     let retryTimer;
     function connect() {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+      const ws = new WebSocket(WS_BASE_URL);
       wsRef.current = ws;
       ws.onopen = () => {
         setConnected(true);
-        ws.send(JSON.stringify({ type: 'SUBSCRIBE', gameCode, role, hostSecret, teamId }));
+        setAuthError(null);
+        ws.send(JSON.stringify({ type: 'SUBSCRIBE', gameCode, role, hostSecret, sessionToken }));
       };
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'STATE_UPDATE') {
           setClockOffsetMs(msg.payload.game.serverNow - Date.now());
           setState(msg.payload);
-        }
+        } else if (msg.type === 'AUTH_ERROR') setAuthError(msg.error);
       };
       ws.onclose = () => {
         setConnected(false);
@@ -40,19 +42,19 @@ export function useGameSocket({ gameCode, role, hostSecret, teamId }) {
       clearTimeout(retryTimer);
       wsRef.current?.close();
     };
-  }, [gameCode, role, hostSecret, teamId]);
+  }, [gameCode, role, hostSecret, sessionToken]);
 
   const send = (payload) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ ...payload, gameCode }));
     }
   };
-  return { state, connected, clockOffsetMs, send };
+  return { state, connected, authError, clockOffsetMs, send };
 }
 
 export default function App() {
   const path = window.location.pathname.replace(/\/+$/, '') || '/join';
-  if (path === '/host') return <HostView useGameSocket={useGameSocket} />;
+  if (path === '/host') return <HostView />;
   if (path === '/display') return <DisplayView useGameSocket={useGameSocket} />;
   return <JoinView useGameSocket={useGameSocket} />;
 }
