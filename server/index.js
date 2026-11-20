@@ -52,11 +52,16 @@ const wss = new WebSocketServer({
 });
 
 const MAX_TEAMS = 24;
-const SET_DURATION_MS = 105_000;
+const QUESTION_DURATION_MS = 120_000; // 2 minutes (2:00) per question
 const ROUND_BASE_MCQ = [0, 100, 150, 200, 250, 300, 350, 400, 500, 0];
 const ROUND_BASE_WA = [0, 200, 300, 400, 500, 600, 700, 800, 1000, 0];
 
 const activeTimers = new Map();
+const questionIndexByGame = new Map(); // Tracks 0, 1, or 2 for 1-by-1 question display
+
+function getQuestionIndex(gameCode) {
+  return questionIndexByGame.get(gameCode) ?? 0;
+}
 
 function generateCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -82,7 +87,7 @@ function calculateSetScore({ roundNum, questions, answers, remainingMs, wager, c
   });
   if (base === 0) return 0;
 
-  const speedRatio = Math.max(0, Math.min(1, remainingMs / SET_DURATION_MS));
+  const speedRatio = Math.max(0, Math.min(1, remainingMs / QUESTION_DURATION_MS));
   const speedBonus = Math.round(base * 0.15 * speedRatio);
   return base + speedBonus;
 }
@@ -108,6 +113,7 @@ async function buildSanitizedState(gameCode, role) {
   );
 
   const revealAnswers = role === 'HOST' || ['REVEAL', 'LEADERBOARD', 'FINISHED'].includes(game.status);
+  const currentQuestionIndex = Math.min(getQuestionIndex(gameCode), Math.max(0, questions.length - 1));
 
   return {
     game: {
@@ -116,6 +122,7 @@ async function buildSanitizedState(gameCode, role) {
       status: game.status,
       currentRound: game.current_round,
       currentSet: game.current_set,
+      currentQuestionIndex,
       difficulty: game.difficulty,
       selectedCategories: game.selected_categories,
       timerEndsAt: game.timer_ends_at ? Number(game.timer_ends_at) : null,
@@ -148,15 +155,41 @@ async function broadcastGame(gameCode) {
   }
 }
 
-function scheduleSetExpiration(gameCode, delayMs) {
+function scheduleQuestionExpiration(gameCode, delayMs) {
   if (activeTimers.has(gameCode)) {
     clearTimeout(activeTimers.get(gameCode));
   }
   const handle = setTimeout(async () => {
     activeTimers.delete(gameCode);
-    await lockAndScoreSet(gameCode);
+    await advanceOrRevealQuestion(gameCode);
   }, Math.max(0, delayMs));
   activeTimers.set(gameCode, handle);
+}
+
+async function advanceOrRevealQuestion(gameCode) {
+  const { rows: games } = await pool.query('SELECT * FROM games WHERE code = $1', [gameCode]);
+  if (!games.length || games[0].status !== 'QUESTION_SET') return;
+  const game = games[0];
+
+  const { rows: questions } = await pool.query(
+    'SELECT id FROM game_questions WHERE game_code = $1 AND round_num = $2 AND set_code = $3 ORDER BY question_index ASC',
+    [gameCode, game.current_round, game.current_set]
+  );
+
+  const curIdx = getQuestionIndex(gameCode);
+  if (curIdx + 1 < questions.length) {
+    const nextIdx = curIdx + 1;
+    questionIndexByGame.set(gameCode, nextIdx);
+    const endsAt = Date.now() + QUESTION_DURATION_MS;
+    await pool.query(
+      'UPDATE games SET timer_ends_at = $2, timer_paused_remaining_ms = NULL, updated_at = NOW() WHERE code = $1',
+      [gameCode, endsAt]
+    );
+    scheduleQuestionExpiration(gameCode, QUESTION_DURATION_MS);
+    await broadcastGame(gameCode);
+  } else {
+    await lockAndScoreSet(gameCode);
+  }
 }
 
 async function lockAndScoreSet(gameCode) {
@@ -224,6 +257,7 @@ app.post('/api/games', async (req, res) => {
        VALUES ($1, $2, $3, $4, $5)`,
       [code, hostName.trim().slice(0, 64), hostSecret, difficulty, JSON.stringify(categories)]
     );
+    questionIndexByGame.set(code, 0);
     res.status(201).json({ code, hostSecret });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -257,6 +291,7 @@ app.post('/api/games/:code/generate-set', async (req, res) => {
         [code, roundNum, setCode, i, q.q_type, q.category, q.prompt, JSON.stringify(q.choices), q.correct_answer, q.explanation, q.difficulty]
       );
     }
+    questionIndexByGame.set(code, 0);
     await broadcastGame(code);
     res.json({ ok: true, questions: generated });
   } catch (err) {
@@ -311,7 +346,7 @@ app.post('/api/games/:code/join', async (req, res) => {
       `INSERT INTO teams (game_code, name, color, avatar, session_token)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, game_code, name, color, avatar, score, connected`,
-      [code, cleanName, color || '#38bdf8', avatar || '⚡', newToken]
+      [code, cleanName, color || '#E8AE58', avatar || '⚡', newToken]
     );
 
     await client.query('COMMIT');
@@ -390,37 +425,29 @@ wss.on('connection', (ws) => {
         await pool.query(
           `INSERT INTO submissions (game_code, team_id, round_num, set_code, answers, wager, submitted_at, remaining_ms)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           ON CONFLICT (game_code, team_id, round_num, set_code) DO NOTHING`,
+           ON CONFLICT (game_code, team_id, round_num, set_code)
+           DO UPDATE SET answers = $5, wager = $6, submitted_at = $7, remaining_ms = $8`,
           [code, ws.teamId, game.current_round, game.current_set, JSON.stringify(msg.answers || []), Number(msg.wager) || 0, now, remainingMs]
         );
 
-        const [{ rows: teamCount }, { rows: subCount }] = await Promise.all([
-          pool.query('SELECT COUNT(*)::int AS c FROM teams WHERE game_code = $1', [code]),
-          pool.query(
-            'SELECT COUNT(*)::int AS c FROM submissions WHERE game_code = $1 AND round_num = $2 AND set_code = $3',
-            [code, game.current_round, game.current_set]
-          ),
-        ]);
-
-        if (teamCount[0].c > 0 && subCount[0].c >= teamCount[0].c) {
-          if (activeTimers.has(code)) clearTimeout(activeTimers.get(code));
-          await lockAndScoreSet(code);
-        } else {
-          await broadcastGame(code);
-        }
+        await broadcastGame(code);
         return;
       }
 
       if (ws.role === 'HOST') {
         if (msg.type === 'START_SET') {
-          const endsAt = Date.now() + SET_DURATION_MS;
+          questionIndexByGame.set(code, 0);
+          const endsAt = Date.now() + QUESTION_DURATION_MS;
           await pool.query(
             `UPDATE games SET status = 'QUESTION_SET', current_round = $2, current_set = $3,
              timer_ends_at = $4, timer_paused_remaining_ms = NULL, updated_at = NOW() WHERE code = $1`,
             [code, msg.roundNum, msg.setCode, endsAt]
           );
-          scheduleSetExpiration(code, SET_DURATION_MS);
+          scheduleQuestionExpiration(code, QUESTION_DURATION_MS);
           await broadcastGame(code);
+        } else if (msg.type === 'NEXT_QUESTION') {
+          if (activeTimers.has(code)) clearTimeout(activeTimers.get(code));
+          await advanceOrRevealQuestion(code);
         } else if (msg.type === 'PAUSE_TIMER') {
           const { rows } = await pool.query('SELECT timer_ends_at FROM games WHERE code = $1', [code]);
           if (rows[0]?.timer_ends_at) {
@@ -441,7 +468,7 @@ wss.on('connection', (ws) => {
               'UPDATE games SET timer_ends_at = $2, timer_paused_remaining_ms = NULL WHERE code = $1',
               [code, endsAt]
             );
-            scheduleSetExpiration(code, Number(rem));
+            scheduleQuestionExpiration(code, Number(rem));
             await broadcastGame(code);
           }
         } else if (msg.type === 'FORCE_REVEAL') {
@@ -466,31 +493,4 @@ wss.on('connection', (ws) => {
   ws.on('close', async () => {
     if (ws.role === 'TEAM' && ws.teamId && ws.gameCode) {
       await pool.query('UPDATE teams SET connected = FALSE WHERE id = $1', [ws.teamId]);
-      await broadcastGame(ws.gameCode);
-    }
-  });
-});
-
-const heartbeat = setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (!ws.isAlive) return ws.terminate();
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 25_000);
-
-const distPath = process.env.CLIENT_DIST_PATH || new URL('../client/dist', import.meta.url).pathname;
-app.use(express.static(distPath));
-app.get(['/', '/host', '/display', '/join', '*'], (_req, res) => res.sendFile(`${distPath}/index.html`));
-
-const PORT = Number(process.env.PORT) || 8080;
-initDb().then(() => {
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Trivia Happy Hour API & WebSocket server listening on port ${PORT}`);
-  });
-});
-
-process.on('SIGTERM', () => {
-  clearInterval(heartbeat);
-  server.close(() => pool.end().then(() => process.exit(0)));
-});
+      await broadcastGame(ws
