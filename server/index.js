@@ -510,17 +510,25 @@ const heartbeat = setInterval(() => {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const distPath = process.env.CLIENT_DIST_PATH || path.resolve(__dirname, '../client/dist');
+const distPath = path.resolve(__dirname, '../client/dist');
 
 app.use(express.static(distPath));
-app.get('/{*splat}', (_req, res) => {
+
+app.get(['/', '/host', '/display', '/join'], (_req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
+});
+
+app.use((req, res) => {
+  if (req.method === 'GET' && !req.path.startsWith('/api')) {
+    return res.sendFile(path.join(distPath, 'index.html'));
+  }
+  return res.status(404).json({ error: 'Not found' });
 });
 
 const PORT = Number(process.env.PORT) || 8080;
 initDb().then(() => {
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Trivia Happy Hour API & WebSocket server listening on port ${PORT}`);
+    console.log(`Trivia Happy Hour API & WebSocket server listening on port ${PORT} (serving ${distPath})`);
   });
 });
 
