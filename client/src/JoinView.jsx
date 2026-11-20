@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { API_BASE_URL } from './config';
 import CelebrationCanvas from './CelebrationCanvas';
+import { getRoundCardColor, getAnswerImageUrl, getAnswerFallbackSvg } from './cardTheme';
 
 const AVATARS = ['⚡', '🔥', '🚀', '🦊', '🐯', '🦉', '👑', '🎯', '🎸', '🧠', '🏆', '💎'];
-const COLORS = ['#38bdf8', '#f59e0b', '#10b981', '#f43f5e', '#a855f7', '#ec4899', '#14b8a6', '#eab308'];
+const COLORS = ['#E8AE58', '#9BB88F', '#E38B6F', '#8AB6D6', '#B8A4D6', '#F0C35B', '#89C7B9', '#E49AB0'];
+const LETTERS = ['A', 'B', 'C', 'D'];
 const TEAM_STORAGE_KEY = 'thh_team_session_v1';
 
 function playTone(frequencies, duration = 0.6) {
@@ -26,7 +28,7 @@ function playTone(frequencies, duration = 0.6) {
     });
     window.setTimeout(() => context.close().catch(() => {}), 1500);
   } catch {
-    // Browser audio may be unavailable or blocked until a user gesture.
+    // Audio optional
   }
 }
 
@@ -40,10 +42,11 @@ export default function JoinView({ useGameSocket }) {
       return null;
     }
   });
+
   const [code, setCode] = useState(initialCode || session?.gameCode || '');
   const [teamName, setTeamName] = useState('');
-  const [avatar, setAvatar] = useState(AVATARS[0]);
-  const [color, setColor] = useState(COLORS[0]);
+  const [avatar, setAvatar] = useState(() => AVATARS[Math.floor(Math.random() * AVATARS.length)]);
+  const [color, setColor] = useState(() => COLORS[Math.floor(Math.random() * COLORS.length)]);
   const [joining, setJoining] = useState(false);
   const [error, setError] = useState('');
   const [answers, setAnswers] = useState(['', '', '']);
@@ -66,15 +69,17 @@ export default function JoinView({ useGameSocket }) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionToken: session.sessionToken }),
-    }).then((response) => {
-      if (!response.ok && !cancelled) {
-        localStorage.removeItem(TEAM_STORAGE_KEY);
-        setSession(null);
-      }
-    }).catch(() => {
-      // WebSocket reconnect logic can recover when the backend is temporarily offline.
-    });
-    return () => { cancelled = true; };
+    })
+      .then((response) => {
+        if (!response.ok && !cancelled) {
+          localStorage.removeItem(TEAM_STORAGE_KEY);
+          setSession(null);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [session]);
 
   useEffect(() => {
@@ -92,9 +97,14 @@ export default function JoinView({ useGameSocket }) {
   const myTeam = teams.find((team) => team.id === session?.teamId);
   const myRank = session ? teams.findIndex((team) => team.id === session.teamId) + 1 : 0;
   const winner = game?.status === 'FINISHED' && myRank === 1 && teams.length > 0;
-  const remainingSeconds = !game ? 105 : game.timerPausedRemainingMs != null
+
+  const remainingSeconds = !game
+    ? 120
+    : game.timerPausedRemainingMs != null
     ? Math.ceil(game.timerPausedRemainingMs / 1000)
-    : !game.timerEndsAt ? 105 : Math.max(0, Math.ceil((game.timerEndsAt - (nowMs + clockOffsetMs)) / 1000));
+    : !game.timerEndsAt
+    ? 120
+    : Math.max(0, Math.ceil((game.timerEndsAt - (nowMs + clockOffsetMs)) / 1000));
 
   useEffect(() => {
     if (winner && !celebrated.current) {
@@ -135,44 +145,255 @@ export default function JoinView({ useGameSocket }) {
     reconnected.current = false;
   }
 
+  // 1-STEP EASY LOGIN SCREEN
   if (!session) {
     return (
-      <main className="panel">
-        <p className="eyebrow">TRIVIA HAPPY HOUR</p><h1>Join a game</h1>
-        <form onSubmit={join}>
-          <label>Room code<input value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} required maxLength="8" /></label>
-          <label>Team name<input value={teamName} onChange={(event) => setTeamName(event.target.value)} required maxLength="40" /></label>
-          <p>Choose an avatar</p><div className="avatar-picker">{AVATARS.map((item) => <button key={item} type="button" className={avatar === item ? 'avatar selected' : 'avatar'} onClick={() => setAvatar(item)}>{item}</button>)}</div>
-          <p>Team color</p><div className="color-picker">{COLORS.map((item) => <button key={item} type="button" aria-label={`Select ${item}`} className={color === item ? 'color-swatch selected' : 'color-swatch'} style={{ backgroundColor: item }} onClick={() => setColor(item)} />)}</div>
-          <button disabled={joining}>{joining ? 'Joining…' : 'Join room'}</button>
-        </form>
-        {error && <p className="error">{error}</p>}
+      <main className="editorial-stage">
+        <div className="editorial-card" style={{ '--card-bg': '#E8AE58' }}>
+          <p className="editorial-kicker">
+            {initialCode ? `ROOM ${initialCode} READY` : 'QUICK PLAYER LOGIN'}
+          </p>
+          <h1 className="editorial-title">Trivia</h1>
+          <p className="editorial-prompt">Enter your team name to jump straight in.</p>
+
+          <form onSubmit={join} style={{ display: 'grid', gap: '0.85rem', textAlign: 'left' }}>
+            {!initialCode && (
+              <div>
+                <label style={{ fontWeight: 800, fontSize: '0.8rem', letterSpacing: '0.08em' }}>
+                  ROOM CODE
+                </label>
+                <input
+                  className="editorial-input"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.toUpperCase())}
+                  placeholder="e.g. PZYA9"
+                  required
+                  maxLength={8}
+                />
+              </div>
+            )}
+
+            <div>
+              <label style={{ fontWeight: 800, fontSize: '0.8rem', letterSpacing: '0.08em' }}>
+                TEAM OR PLAYER NAME
+              </label>
+              <input
+                className="editorial-input"
+                value={teamName}
+                onChange={(e) => setTeamName(e.target.value)}
+                placeholder="Type your name…"
+                autoFocus
+                required
+                maxLength={40}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 700 }}>Icon: {avatar}</span>
+              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+                {AVATARS.slice(0, 6).map((item) => (
+                  <button
+                    key={item}
+                    type="button"
+                    onClick={() => setAvatar(item)}
+                    style={{
+                      padding: '0.3rem 0.5rem',
+                      borderRadius: '10px',
+                      border: '2px solid #23170e',
+                      background: avatar === item ? '#23170e' : '#faf5ea',
+                    }}
+                  >
+                    {item}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button type="submit" className="editorial-submit-btn" disabled={joining || !teamName.trim()}>
+              {joining ? 'Joining Room…' : 'Enter Game →'}
+            </button>
+          </form>
+
+          {error && <p className="editorial-error">{error}</p>}
+        </div>
       </main>
     );
   }
 
   const questions = state?.questions || [];
-  const submitted = (state?.submittedTeamIds || []).includes(session.teamId);
+  const roundNum = game?.currentRound || 1;
+  const cardBg = getRoundCardColor(roundNum);
+  const qIdx = Math.min(game?.currentQuestionIndex ?? 0, Math.max(0, questions.length - 1));
+  const activeQuestion = questions[qIdx];
   const score = Number(myTeam?.score ?? 0);
+  const currentChoice = answers[qIdx] || '';
+
+  function selectAnswer(value) {
+    const nextAnswers = [...answers];
+    nextAnswers[qIdx] = value;
+    setAnswers(nextAnswers);
+    playTone([523.25, 783.99], 0.2);
+    send({ type: 'SUBMIT_ANSWERS', answers: nextAnswers, wager });
+  }
 
   return (
-    <main className="panel wide team-view">
+    <main className="editorial-stage">
       <CelebrationCanvas active={Boolean(winner)} />
-      <header className="team-header"><div><p className="eyebrow">TEAM · {connected ? 'CONNECTED' : 'RECONNECTING'}</p><h1>{myTeam?.avatar || avatar} {myTeam?.name || 'Your team'}</h1><p>Room {session.gameCode} · Rank #{myRank || '—'}</p></div><div className="team-score">{score.toLocaleString()}<small>POINTS</small></div></header>
-      {authError && <p className="error">{authError} <button type="button" onClick={leave}>Rejoin</button></p>}
-      {!game ? <p>Connecting to room {session.gameCode}…</p> : <>
-        {game.status === 'LOBBY' && <section className="question"><h2>You’re on the Big Screen!</h2><p>Watch the main display. The host will launch the game shortly.</p></section>}
-        {game.status === 'QUESTION_SET' && <section className="team-questions"><div className="team-timer">{Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, '0')}</div>
-          {submitted ? <p className="question">Answers locked in! Waiting for the reveal.</p> : <form onSubmit={(event) => { event.preventDefault(); playTone([523.25, 783.99], 0.25); send({ type: 'SUBMIT_ANSWERS', answers, wager }); }}>
-            {game.currentRound === 9 && <label>Championship wager (max {score})<input type="number" min="0" max={score} value={wager} onChange={(event) => setWager(Number(event.target.value) || 0)} /></label>}
-            {questions.map((question, index) => <label className="answer" key={question.id}><span>{question.prompt}</span>{question.type === 'MCQ' ? <select required value={answers[question.index] || ''} onChange={(event) => setAnswers((current) => { const next = [...current]; next[question.index] = event.target.value; return next; })}><option value="">Select an answer</option>{(question.choices || []).map((choice) => <option key={choice} value={choice}>{choice}</option>)}</select> : <><div className="clues">{(question.choices || []).map((clue) => <span key={clue}>{clue}</span>)}</div><input required value={answers[question.index] || ''} onChange={(event) => setAnswers((current) => { const next = [...current]; next[question.index] = event.target.value; return next; })} placeholder="Type your answer" /></>}</label>)}
-            <button type="submit">Buzz in &amp; lock answers</button>
-          </form>}
-        </section>}
-        {game.status === 'FINISHED' && <section className={winner ? 'victory-card' : 'question'}><p className="eyebrow">{winner ? '🎉 1ST PLACE CHAMPIONS 🎉' : `FINAL RANK: #${myRank || '—'}`}</p>{winner && <span className="champion-avatar" style={{ backgroundColor: myTeam?.color || color }}>{myTeam?.avatar || avatar}</span>}<h2>{winner ? `${myTeam?.name || teamName} Win It All!` : 'Game finished'}</h2><p>Final score: {score.toLocaleString()} points</p></section>}
-        {['REVEAL', 'LEADERBOARD'].includes(game.status) && <section className="question"><h2>{game.status === 'LEADERBOARD' ? 'Live leaderboard' : 'Answers revealed'}</h2>{teams.map((team, index) => <p className="rank" key={team.id}><b>#{index + 1}</b> {team.avatar} {team.name}<strong>{Number(team.score || 0).toLocaleString()}</strong></p>)}</section>}
-      </>}
-      {error && <p className="error">{error}</p>}
+
+      <div className="editorial-topbar">
+        <span className="editorial-pill-badge">
+          {myTeam?.avatar || avatar} {myTeam?.name || 'TEAM'} · #{myRank || '—'}
+        </span>
+        {game?.status === 'QUESTION_SET' && (
+          <span className="editorial-timer-badge">
+            ⏱ {Math.floor(remainingSeconds / 60)}:{String(remainingSeconds % 60).padStart(2, '0')}
+          </span>
+        )}
+        <span className="editorial-pill-badge">{score.toLocaleString()} PTS</span>
+      </div>
+
+      {authError && (
+        <div className="editorial-error" style={{ marginBottom: '1rem' }}>
+          {authError}{' '}
+          <button type="button" onClick={leave} style={{ textDecoration: 'underline', marginLeft: '0.5rem' }}>
+            Rejoin
+          </button>
+        </div>
+      )}
+
+      {!game || game.status === 'LOBBY' || game.status === 'ROUND_INTRO' ? (
+        <section className="editorial-card" style={{ '--card-bg': cardBg }}>
+          <p className="editorial-kicker">
+            {connected ? `ROOM ${session.gameCode}` : 'RECONNECTING…'}
+          </p>
+          <h1 className="editorial-title">Trivia</h1>
+          <p className="editorial-q-label">You’re In!</p>
+          <p className="editorial-prompt">
+            Watch the main screen. Question 1 will appear right here as soon as the host starts.
+          </p>
+        </section>
+      ) : game.status === 'QUESTION_SET' && activeQuestion ? (
+        <section className="editorial-card" style={{ '--card-bg': cardBg }} key={activeQuestion.id}>
+          <p className="editorial-kicker">
+            ROUND {roundNum} · QUESTION {qIdx + 1} OF {questions.length}
+          </p>
+          <h1 className="editorial-title">Trivia</h1>
+          <p className="editorial-q-label">Question {qIdx + 1}:</p>
+          <p className="editorial-prompt">{activeQuestion.prompt}</p>
+
+          {game.currentRound === 9 && (
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ fontWeight: 800, fontSize: '0.8rem' }}>
+                FINAL WAGER (MAX {score})
+              </label>
+              <input
+                type="number"
+                className="editorial-input"
+                min="0"
+                max={score}
+                value={wager}
+                onChange={(e) => setWager(Number(e.target.value) || 0)}
+              />
+            </div>
+          )}
+
+          {activeQuestion.type === 'MCQ' ? (
+            <div className="editorial-choices">
+              {(activeQuestion.choices || []).map((choice, idx) => {
+                const letter = LETTERS[idx] || String(idx + 1);
+                const isSelected = currentChoice === choice;
+                return (
+                  <button
+                    key={choice}
+                    type="button"
+                    className={`editorial-choice-btn ${isSelected ? 'selected' : ''}`}
+                    onClick={() => selectAnswer(choice)}
+                  >
+                    <img
+                      className="editorial-choice-thumb"
+                      src={getAnswerImageUrl(choice, activeQuestion.category)}
+                      alt={choice}
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = getAnswerFallbackSvg(letter, choice);
+                      }}
+                    />
+                    <span className="editorial-choice-text">
+                      <span className="editorial-choice-letter">{letter}.</span> {choice}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                selectAnswer(currentChoice);
+              }}
+            >
+              <div className="editorial-choices" style={{ marginBottom: '0.85rem' }}>
+                {(activeQuestion.choices || []).map((clue, idx) => (
+                  <div className="editorial-choice-btn" key={clue}>
+                    <img
+                      className="editorial-choice-thumb"
+                      src={getAnswerImageUrl(clue, activeQuestion.category)}
+                      alt={clue}
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = getAnswerFallbackSvg(LETTERS[idx] || '•', clue);
+                      }}
+                    />
+                    <span className="editorial-choice-text">CLUE {idx + 1}: {clue}</span>
+                  </div>
+                ))}
+              </div>
+              <input
+                className="editorial-input"
+                value={currentChoice}
+                onChange={(e) => {
+                  const next = [...answers];
+                  next[qIdx] = e.target.value;
+                  setAnswers(next);
+                }}
+                placeholder="Type the 1-word connection…"
+                required
+              />
+              <button type="submit" className="editorial-submit-btn">
+                Lock In Answer ✓
+              </button>
+            </form>
+          )}
+
+          {currentChoice && (
+            <p style={{ marginTop: '0.85rem', fontWeight: 800, fontSize: '0.85rem' }}>
+              ✓ Locked in: {currentChoice} (you can tap another choice before time runs out)
+            </p>
+          )}
+        </section>
+      ) : (
+        <section className="editorial-card" style={{ '--card-bg': cardBg }}>
+          <p className="editorial-kicker">
+            {winner ? '🎉 1ST PLACE CHAMPIONS 🎉' : `RANK #${myRank || '—'}`}
+          </p>
+          <h1 className="editorial-title">
+            {game.status === 'FINISHED' ? (winner ? 'You Won!' : 'Game Over') : 'Standings'}
+          </h1>
+          <p className="editorial-prompt">
+            Score: <strong>{score.toLocaleString()} points</strong>
+          </p>
+          <div>
+            {teams.map((team, index) => (
+              <div className="editorial-rank-row" key={team.id}>
+                <span>
+                  #{index + 1} · {team.avatar} {team.name}
+                </span>
+                <strong>{Number(team.score || 0).toLocaleString()}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </main>
   );
 }
