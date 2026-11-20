@@ -437,21 +437,29 @@ wss.on('connection', (ws) => {
       if (ws.role === 'HOST') {
         if (msg.type === 'START_SET') {
           questionIndexByGame.set(code, 0);
-          const endsAt = Date.now() + QUESTION_DURATION_MS;
-          await pool.query(
-            `UPDATE games SET status = 'QUESTION_SET', current_round = $2, current_set = $3,
-             timer_ends_at = $4, timer_paused_remaining_ms = NULL, updated_at = NOW() WHERE code = $1`,
-            [code, msg.roundNum, msg.setCode, endsAt]
-          );
-          scheduleQuestionExpiration(code, QUESTION_DURATION_MS);
-          await broadcastGame(code);
-        } else if (msg.type === 'NEXT_QUESTION') {
-          if (activeTimers.has(code)) clearTimeout(activeTimers.get(code));
-          await advanceOrRevealQuestion(code);
-        } else if (msg.type === 'PAUSE_TIMER') {
-          const { rows } = await pool.query('SELECT timer_ends_at FROM games WHERE code = $1', [code]);
-          if (rows[0]?.timer_ends_at) {
-            if (activeTimers.has(code)) clearTimeout(activeTimers.get(code));
+     import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const distPath = process.env.CLIENT_DIST_PATH || path.resolve(__dirname, '../client/dist');
+
+app.use(express.static(distPath));
+app.get('/{*splat}', (_req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
+
+const PORT = Number(process.env.PORT) || 8080;
+initDb().then(() => {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Trivia Happy Hour API & WebSocket server listening on port ${PORT}`);
+  });
+});
+
+process.on('SIGTERM', () => {
+  clearInterval(heartbeat);
+  server.close(() => pool.end().then(() => process.exit(0)));
+});
             const rem = Math.max(0, Number(rows[0].timer_ends_at) - Date.now());
             await pool.query(
               'UPDATE games SET timer_ends_at = NULL, timer_paused_remaining_ms = $2 WHERE code = $1',
